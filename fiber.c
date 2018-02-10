@@ -323,9 +323,9 @@ ZEND_METHOD(Fiber, __construct)
 }
 /* }}} */
 
-/* {{{ proto mixed Fiber::resume(vars...)
+/* {{{ proto mixed Fiber::init(vars...)
  * Resume and send a value to the fiber */
-ZEND_METHOD(Fiber, resume)
+ZEND_METHOD(Fiber, init)
 {
 	zval *params;
 	uint32_t param_count;
@@ -341,17 +341,41 @@ ZEND_METHOD(Fiber, resume)
 		if (zend_fiber_start(fiber, params, param_count) != SUCCESS) {
 			return;
 		}
-	} else if (fiber->status == ZEND_FIBER_STATUS_SUSPENDED) {
-		if (param_count) {
-			if (param_count == 1) {
-				if (fiber->send_value) {
-					ZVAL_COPY(fiber->send_value, params);
-					fiber->send_value = NULL;
-				}
-			} else {
-				zend_error(E_WARNING, "Attempt to resume Fiber with many arguments");
-				return;
-			}
+	} else {
+		zend_error(E_WARNING, "Attempt to initialize an already initialized Fiber");
+		return;
+	}
+
+	fiber->root_execute_data->return_value = USED_RET() ? return_value : NULL;
+	fiber->original_fiber = FIBER_G(current_fiber);
+	FIBER_G(next_fiber) = fiber;
+	FIBER_G(pending_interrupt) = 1;
+	EG(vm_interrupt) = 1;
+
+	if (UNEXPECTED(EX_CALL_INFO() & ZEND_CALL_RELEASE_THIS)) {
+		GC_ADDREF((zend_object *)fiber);
+		FIBER_G(release_this) = 1;
+	}
+}
+/* }}} */
+
+/* {{{ proto mixed Fiber::resume(var)
+ * Resume and send a value to the fiber */
+ZEND_METHOD(Fiber, resume)
+{
+	zval *var;
+	zend_fiber *fiber;
+
+	ZEND_PARSE_PARAMETERS_START(1, 1)
+		Z_PARAM_ZVAL(var);
+	ZEND_PARSE_PARAMETERS_END();
+
+	fiber = (zend_fiber *) Z_OBJ_P(getThis());
+
+	if (fiber->status == ZEND_FIBER_STATUS_SUSPENDED) {
+		if (fiber->send_value) {
+			ZVAL_COPY(fiber->send_value, var);
+			fiber->send_value = NULL;
 		}
 	} else {
 		zend_error(E_WARNING, "Attempt to resume non suspended Fiber");
@@ -590,8 +614,12 @@ ZEND_END_ARG_INFO()/*}}}*/
 ZEND_BEGIN_ARG_INFO(arginfo_fiber_void, 0)/*{{{*/
 ZEND_END_ARG_INFO()/*}}}*/
 
-ZEND_BEGIN_ARG_INFO_EX(arginfo_fiber_resume, 0, 0, 0)/*{{{*/
+ZEND_BEGIN_ARG_INFO_EX(arginfo_fiber_init, 0, 0, 0)/*{{{*/
 	ZEND_ARG_VARIADIC_INFO(0, vars)
+ZEND_END_ARG_INFO()/*}}}*/
+
+ZEND_BEGIN_ARG_INFO(arginfo_fiber_resume, 0)/*{{{*/
+	ZEND_ARG_INFO(0, var)
 ZEND_END_ARG_INFO()/*}}}*/
 
 ZEND_BEGIN_ARG_INFO(arginfo_fiber_yield, 0)/*{{{*/
@@ -605,6 +633,7 @@ ZEND_END_ARG_INFO()/*}}}*/
 static const zend_function_entry fiber_functions[] = {/*{{{*/
 	ZEND_ME(Fiber, __construct, arginfo_fiber_create, ZEND_ACC_PUBLIC)
 	ZEND_ME(Fiber, reset,       arginfo_fiber_create, ZEND_ACC_PUBLIC)
+	ZEND_ME(Fiber, init,        arginfo_fiber_init,   ZEND_ACC_PUBLIC)
 	ZEND_ME(Fiber, resume,      arginfo_fiber_resume, ZEND_ACC_PUBLIC)
 	ZEND_ME(Fiber, yield,       arginfo_fiber_yield,  ZEND_ACC_PUBLIC|ZEND_ACC_STATIC)
 	ZEND_ME(Fiber, throw,       arginfo_fiber_throw,  ZEND_ACC_PUBLIC)
